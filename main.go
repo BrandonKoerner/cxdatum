@@ -4,7 +4,7 @@ import (
 	//"io/ioutil"
 	"os"
 
-	"github.com/SkycoinProject/cx/cxtweet/cxdatum/syntax"
+	"github.com/ReewassSquared/cxdatum/syntax"
 )
 
 /* expects a single file. */
