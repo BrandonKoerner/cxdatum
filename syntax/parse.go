@@ -97,6 +97,7 @@ type DType struct {
 	tkind int
 	datum *DGlause //points to datum if datum
 	dbase *DGlause //points to database if database
+	islit bool     //used by the compiler
 }
 
 type DField struct {
@@ -320,6 +321,7 @@ func (p *Parser) parseClause(g *DGlause) *DClause {
 		/* indicates data is to be sent as new blockchain object */
 		clause := new(DClause)
 		clause.ckind = CKINDEXACT
+		p.Next()
 		clause.expr = p.parseExpr(g, false)
 		if dtypeToString(clause.expr.typ) != "array of byte" {
 			panic("cannot use exact statement on expression of type " + dtypeToString(clause.expr.typ))
@@ -457,6 +459,10 @@ func (p *Parser) parseExprIn(g *DGlause) *DExpr {
 	}
 	expr.rhs = rhs
 	expr.fld = elt
+	if _, ok := g.syms[elt.name]; ok {
+		p.errorf("identifier already in use: " + elt.name)
+	}
+	g.syms[elt.name] = elt
 	expr.ekind = EKINDIN
 	expr.mut = false
 	expr.typ = elt.typ //only for debug purposes
@@ -497,13 +503,13 @@ func (p *Parser) parseExpr(g *DGlause, mut bool) *DExpr {
 		return expr
 	case NUMLIT:
 		num := p.parseNum()
-		expr.typ = &DType{tkind: TKINDINT}
+		expr.typ = &DType{tkind: TKINDINT, islit: true}
 		expr.left = num
 		expr.right = -1
 		expr.ekind = EKINDPRIME
 		return p.parseExprPost(g, expr, mut)
 	case STRLIT:
-		expr.typ = &DType{tkind: TKINDSTRING}
+		expr.typ = &DType{tkind: TKINDSTRING, islit: true}
 		expr.lit = p.lit
 		expr.ekind = EKINDPRIME
 		p.Next()
