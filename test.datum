@@ -1,0 +1,163 @@
+datum Tweet {
+  owner: wallet;
+  obj: hash;
+  txt: string;
+  likes: int;
+  retwt: int;
+  tags: array of wallet;
+  hashs: array of string;
+  rplto: hash;
+}
+
+datum Account {
+  name: string;
+  cname: string;
+  id: wallet;
+  bio: string;
+  pfp: string;
+  tweets: array of hash;
+  likes: array of hash;
+  retweets: array of hash;
+  tags: array of hash;
+  followers: array of wallet;
+  following: array of wallet;
+  followcnt: int;
+  fllwngcnt: int;
+}
+
+datum Hashtag {
+  name: string;
+  tlikes: int;
+  trtwts: int;
+  tweets: array of hash;
+}
+
+/*  */
+database Tweets {
+  hash: Tweet;
+}
+
+database Accounts {
+  wallet: Account;
+}
+
+database Hashtags {
+  string: Hashtag;
+}
+
+database Likes {
+  hash: array of wallet;
+}
+
+database Retweets {
+  hash: array of wallet;
+}
+
+database Names {
+  string: wallet;
+}
+
+database Wallets {
+  wallet: string;
+}
+
+database Replies {
+  hash: array of hash;
+}
+
+ingress processLike {
+  expect {
+    owner: wallet;
+    txid: hash;
+    tweet: array [512] of byte;
+  }
+  
+  ntxid: $tweet [27:91] to string to hash;
+  
+  update @Tweets [$ntxid] .likes inc;
+}
+
+
+ingress processRetweet {
+    expect {
+    owner: wallet;
+    txid: hash;
+    tweet: array [512] of byte;
+  }
+}
+
+ingress main {
+  expect {
+    owner: wallet;
+    txid: hash;
+    tweet: array [512] of byte;
+  }
+  
+  match $tweet [0:27] to wallet to string {
+    "<|::[]CXTWEET_LIKELIK[]::|>" {
+        processLike($owner and $txid and $tweet);
+    }
+    "<|::[]CXTWEET_RETWEET[]::|>" {
+        processRetweet($owner and $txid and $tweet); /* fuck this IDE */
+    }
+  }
+}
+
+egress getTweet {
+  expect {
+    txid: hash;
+  }
+  return {
+    txt: Tweet;
+  }
+
+  update $txt set @Tweets [$txid];
+}
+
+/* 
+  update @Tweets [$ntxid] .likes inc;
+  OP_UPDATE EXPR
+  -> update (@Tweets [$ntxid] .likes inc);
+  OP_IDENDB @
+  -> update ((@Tweets) [$ntxid] .likes inc);
+  -> update ((@Tweets) [($ntxid)] .likes inc);
+  -> update ((@Tweets) ([($ntxid)]) .likes inc);
+  -> update ((@Tweets [ ($ntxid) ]) .likes inc);
+  -> update ((@Tweets [ ($ntxid) ]) (.likes) inc);
+  -> update (((@Tweets [ ($ntxid) ]) .likes) inc);
+
+*/
+  
+/*
+  update operates on database and expression.
+  append only operates lhs on array and rhs on any.
+  inc only operates lhs on int.
+  dec only operates lhs on int.
+  to operates on the following lhs, rhs pairs:
+    array of byte, array [X] of byte
+    array [X] of byte, array of byte
+    string, hash
+    string, wallet
+    wallet, string
+    hash, string
+    array of byte, hash
+    array of byte, wallet
+    array [X] of byte, wallet
+    array [X] of byte, hash
+    hash, array of byte
+    wallet, array of byte
+    wallet, array [X] of byte
+    hash, array [X] of byte
+    string, array of byte
+    string, array [X] of byte
+    array [X] of byte, string
+    array of byte, string
+    array of byte, any datum
+    any datum, array of byte
+  in operates on rhs array or array [X].
+  [X:X] operates on lhs array of byte or array [X] of byte.
+  .X operates lhs on datum, X must be field.
+  [X] operates on lhs database.
+  X: operates on expression. X is ident.
+  Only four mutation ops: inc, dec, append, set.
+*/
