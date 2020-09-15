@@ -49,6 +49,7 @@ const (
 	CKINDUPDATE
 	CKINDCALL
 	CKINDEXPR //stuff like X set Y
+	CKINDSTORE
 )
 
 const (
@@ -353,6 +354,23 @@ func (p *Parser) parseClause(g *DGlause) *DClause {
 		clause.ckind = CKINDUPDATE
 		p.Next()
 		clause.expr = p.parseExpr(g, true)
+		p.want(SCOLON)
+		return clause
+	case STORE:
+		clause := new(DClause)
+		clause.ckind = CKINDSTORE
+		p.Next()
+		clause.exprs = append(clause.exprs, p.parseExpr(g, false))
+		dbtyp := clause.exprs[0].typ
+		if dbtyp.tkind != TKINDDATABASE {
+			p.errorf("store expected database")
+		}
+		p.want(KEY)
+		clause.exprs = append(clause.exprs, p.parseExpr(g, false))
+		p.mustCheckTypeEqual(clause.exprs[1].typ, dbtyp.dbase.key)
+		p.want(VALUE)
+		clause.exprs = append(clause.exprs, p.parseExpr(g, false))
+		p.mustCheckTypeEqual(clause.exprs[2].typ, dbtyp.dbase.val)
 		p.want(SCOLON)
 		return clause
 	case IDENT:

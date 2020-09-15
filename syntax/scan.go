@@ -36,6 +36,9 @@ const (
 	INC
 	DEC
 	UPDATE
+	STORE
+	KEY
+	VALUE
 	SET
 	FOR
 	IN
@@ -235,6 +238,9 @@ var keywords map[string]int = map[string]int{
 	"inc":      INC,
 	"dec":      DEC,
 	"update":   UPDATE,
+	"store":    STORE,
+	"key":      KEY,
+	"value":    VALUE,
 	"set":      SET,
 	"for":      FOR,
 	"in":       IN,
@@ -323,6 +329,12 @@ func tok2str(tok int) string {
 		return "DEC"
 	case UPDATE:
 		return "UPDATE"
+	case STORE:
+		return "STORE"
+	case KEY:
+		return "KEY"
+	case VALUE:
+		return "VALUE"
 	case SET:
 		return "SET"
 	case FOR:

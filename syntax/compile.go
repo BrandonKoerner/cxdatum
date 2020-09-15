@@ -98,7 +98,7 @@ var stdcxops string = `
 func isBase58(code ui8) (out bool) {
     out = false
     var magicstr []ui8
-    magicstr = cxtweet.str2bytes("123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")
+    magicstr = cxdatum.str2bytes("123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")
     for i := 0; i < len(magicstr); i++ {
         if code == magicstr[i] {
             out = true
@@ -110,7 +110,7 @@ func isBase58(code ui8) (out bool) {
 func isTweetHashtag(code ui8) (out bool) {
     out = false
     var magicstr []ui8
-    magicstr = cxtweet.str2bytes("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_")
+    magicstr = cxdatum.str2bytes("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_")
     for i := 0; i < len(magicstr); i++ {
         if code == magicstr[i] {
             out = true
@@ -149,7 +149,7 @@ func shaToHex(sha [32]ui8) (out str) {
         arr = append(arr, intmp)
     }
 
-    out = cxtweet.bytes2str(arr)
+    out = cxdatum.bytes2str(arr)
 }
 
 
@@ -215,7 +215,7 @@ func deserializeStr(sl []ui8, idx_ *i32) (out str) {
     for i := 0; i < slen; i++ {
         strb = append(strb, sl[idx + i])
     }
-    out = cxtweet.bytes2str(strb)
+    out = cxdatum.bytes2str(strb)
     (*idx_) = idx + slen
 }
 
@@ -323,7 +323,7 @@ func serializeShaSlice(sl []ui8) (out []ui8) {
 
 func serializeStr(s str) (out []ui8) {
     var serstr []ui8 
-    serstr = cxtweet.str2bytes(s)
+    serstr = cxdatum.str2bytes(s)
     var serlen [4]ui8 = serializeI32(len(serstr))
     for i := 0; i < 4; i++ {
         out = append(out, serlen[i])
@@ -508,6 +508,19 @@ func (c *Compiler) compileClause(incnt int, d *DClause) string {
 				rv += "\n"
 			}
 		}
+	case CKINDSTORE:
+		/* get database */
+		rv += c.compileExpr(incnt, d.exprs[0], false)
+		rv += c.compileExpr(incnt, d.exprs[1], false)
+		rv += c.compileExpr(incnt, d.exprs[2], false)
+		slookupnm := c.gensym()
+		rv += fmt.Sprintf("%svar %s []ui8\n%s%s = %s\n", id, slookupnm, id, slookupnm, c.compileSerializeLookup(d.exprs[1].typ, d.exprs[1].kname))
+		sresnm := c.gensym()
+		rv += fmt.Sprintf("%svar %s []ui8\n", id, sresnm) //compileType(d.typ, true))
+		rv += fmt.Sprintf("%s%s = %s\n", id, sresnm, c.compileSerialize(d.exprs[2].typ, d.exprs[2].kname))
+		okbool := c.gensym()
+		rv += fmt.Sprintf("%svar %s bool\n", id, okbool)
+		rv += fmt.Sprintf("%s%s = cxdatum.store(%s, %s, %s)\n", id, okbool, d.exprs[0].kname, slookupnm, sresnm)
 	case CKINDEXPR:
 		rv += c.compileExpr(incnt, d.expr, true)
 		/* backprop!!! */
@@ -563,7 +576,11 @@ func (c *Compiler) compileExpr(incnt int, d *DExpr, back bool) string {
 			rv += fmt.Sprintf("%svar %s i32\n%s%s = %d\n", id, numlitnm, id, numlitnm, d.left)
 			d.kname = numlitnm
 		} else {
-			d.kname = d.fld.name
+			if d.typ.tkind == TKINDDATABASE {
+				d.kname = d.fld.typ.dbase.name
+			} else {
+				d.kname = d.fld.name
+			}
 		}
 	case EKINDLOOKUP:
 		/* reasonably simple. (1) create svar, (2) do lookup, (3) create realvar, (4) deserialize. */
@@ -575,7 +592,16 @@ func (c *Compiler) compileExpr(incnt int, d *DExpr, back bool) string {
 		rv += fmt.Sprintf("%svar %s []ui8\n", id, sresnm) //compileType(d.typ, true))
 		rv += fmt.Sprintf("%s%s = cxdatum.fetch(%s, %s)\n", id, sresnm, d.lhs.fld.typ.dbase.name, slookupnm)
 		/* decode */
-		rvs_, resnm := c.compileDeserialize(incnt, d.typ, sresnm)
+		rvs_ := ""
+		resnm := ""
+		if d.typ.tkind == TKINDDATUM {
+			/* might need to create variable */
+			resnm = c.gensym()
+			dscd := fmt.Sprintf("%s = deserialize%s(%s)", resnm, d.typ.datum.name, sresnm)
+			rvs_ = fmt.Sprintf("%sif len(%s) == 0 {\n%s\t%s = %s{}\n%s} else {%s\t%s\n%s}\n", id, sresnm, id, resnm, d.typ.datum.name, id, id, dscd, id)
+		} else {
+			rvs_, resnm = c.compileDeserialize(incnt, d.typ, sresnm)
+		}
 		rv += rvs_
 		d.kname = resnm
 		/* generate backprop code and push to stack */
