@@ -173,7 +173,7 @@ func stringToSha(s str) (out [32]ui8) {
         tpcode = tpcode * 16UB
         tpcode = tpcode + toHexDigit(tweet[indx])
         indx = indx + 1
-        txid[i] = tpcode
+        out[i] = tpcode
     }
 }
 `
@@ -203,6 +203,8 @@ func breakInt(i int) []byte {
 var stdcxmodel string = `
 package model
 
+import "cxdatum"
+
 func deserializeI32(sl []ui8, idx_ *i32) (out i32) {
     var idx i32 = *idx_
     out = i32.bitshl(ui8.i32(sl[idx]), 24)
@@ -214,20 +216,26 @@ func deserializeI32(sl []ui8, idx_ *i32) (out i32) {
 
 func deserializeStr(sl []ui8, idx_ *i32) (out str) {
     var idx i32 = *idx_
-    var slen i32
-    slen = deserializeI32(sl, &idx)
+	var slen i32
+	if len(sl) <= idx {
+		return
+	}
+	slen = deserializeI32(sl, &idx)
     var strb []ui8 
     for i := 0; i < slen; i++ {
         strb = append(strb, sl[idx + i])
     }
-    out = cxdatum.bytes2str(strb)
+	out = cxdatum.bytes2str(strb)
     (*idx_) = idx + slen
 }
 
 func deserializeStrSlice(sl []ui8, idx_ *i32) (out []str) {
     var idx i32 = *idx_
     var slen i32
-    var strt str
+	var strt str
+	if len(sl) <= idx {
+		return
+	}
     slen = deserializeI32(sl, &idx)
     for j := 0; j < slen; j++ {
         strt = deserializeStr(sl, &idx)
@@ -238,7 +246,10 @@ func deserializeStrSlice(sl []ui8, idx_ *i32) (out []str) {
 
 func deserializeWalSlice(sl []ui8, idx_ *i32) (out []ui8) {
     var idx i32 = *idx_
-    var slen i32
+	var slen i32
+	if len(sl) <= idx {
+		return
+	}
     slen = deserializeI32(sl, &idx)
     var slenn i32
     slenn = slen*25
@@ -252,7 +263,10 @@ func deserializeWalSlice(sl []ui8, idx_ *i32) (out []ui8) {
 
 func deserializeShaSlice(sl []ui8, idx_ *i32) (out []ui8) {
     var idx i32 = *idx_
-    var slen i32
+	var slen i32
+	if len(sl) <= idx {
+		return
+	}
     slen = deserializeI32(sl, &idx)
     var slenn i32
     slenn = slen*32
@@ -263,7 +277,12 @@ func deserializeShaSlice(sl []ui8, idx_ *i32) (out []ui8) {
 }
 
 func deserializeWal(sl []ui8, idx_ *i32) (out [25]ui8) {
-    var idx i32 = *idx_
+	var idx i32 = *idx_
+	var tmtst i32
+	tmtst = idx + 25
+	if len(sl) < tmtst {
+		return
+	}
     for i := 0; i < 25; i++ {
         out[i] = sl[i32.add(idx, i)]
     }
@@ -271,7 +290,15 @@ func deserializeWal(sl []ui8, idx_ *i32) (out [25]ui8) {
 }
 
 func deserializeSha(sl []ui8, idx_ *i32) (out [32]ui8) {
-    var idx i32 = *idx_
+	if len(sl) < 32 {
+		return
+	}
+	var idx i32 = *idx_
+	var tmtst i32
+	tmtst = idx + 32
+	if len(sl) < tmtst {
+		return
+	}
     for i := 0; i < 32; i++ {
         out[i] = sl[i32.add(idx, i)]
     }
@@ -412,6 +439,9 @@ func (c *Compiler) compileEgress(d *DGlause) {
 		}
 	}
 	rv += ") (out []ui8) {\n"
+	for i, _ := range d.ret {
+		rv += c.compileVar(1, d.ret[i])
+	}
 	/* compiling statements now. Can be one helluva bitch. */
 	for i, _ := range d.clauses {
 		rv += c.compileClause(incnt, d.clauses[i])
@@ -513,6 +543,11 @@ func (c *Compiler) compileClause(incnt int, d *DClause) string {
 				rv += "\n"
 			}
 		}
+	case CKINDEXIT:
+		rv += id + "return\n"
+	case CKINDDEBUG:
+		rv += c.compileExpr(incnt, d.expr, false)
+		rv += fmt.Sprintf("%sprintf(\"%%s\\n\", %s)\n", id, d.expr.kname)
 	case CKINDSTORE:
 		/* get database */
 		rv += c.compileExpr(incnt, d.exprs[0], false)
@@ -546,7 +581,14 @@ func (c *Compiler) compileFor(incnt int, d *DClause) string {
 	//we need to get the length of whatever the expression is
 	//but first we need the expression.
 	rv += c.compileExpr(incnt, d.expr.rhs, false) //this is correct
-	rv += fmt.Sprintf("\n%sfor %s := 0; %s < len(%s), %s++ {\n", id, cnt, cnt, d.expr.rhs.kname, cnt)
+	var denom string
+	switch d.expr.fld.typ.tkind {
+	case TKINDWALLET:
+		denom = " / 25"
+	case TKINDHASH:
+		denom = " / 32"
+	}
+	rv += fmt.Sprintf("\n%sfor %s := 0; %s < len(%s)%s; %s++ {\n", id, cnt, cnt, d.expr.rhs.kname, denom, cnt)
 	/* needs to know what index code to use. since rhs is []str, []ui8, []hash, or []wallet...*/
 	rv += c.compileVar(incnt+1, d.expr.fld)
 	rv += fmt.Sprintf("%s\t%s = %s\n", id, d.expr.fld.name, c.compileAppend(d.expr.fld.typ, true, d.expr.rhs.kname, cnt))
@@ -602,8 +644,9 @@ func (c *Compiler) compileExpr(incnt int, d *DExpr, back bool) string {
 		if d.typ.tkind == TKINDDATUM {
 			/* might need to create variable */
 			resnm = c.gensym()
+			rvs_ = fmt.Sprintf("%svar %s %s\n", id, resnm, d.typ.datum.name)
 			dscd := fmt.Sprintf("%s = deserialize%s(%s)", resnm, d.typ.datum.name, sresnm)
-			rvs_ = fmt.Sprintf("%sif len(%s) == 0 {\n%s\t%s = %s{}\n%s} else {%s\t%s\n%s}\n", id, sresnm, id, resnm, d.typ.datum.name, id, id, dscd, id)
+			rvs_ += fmt.Sprintf("%sif len(%s) == 0 {\n%s\t%s = %s{}\n%s} else {\n%s\t%s\n%s}\n", id, sresnm, id, resnm, d.typ.datum.name, id, id, dscd, id)
 		} else {
 			rvs_, resnm = c.compileDeserialize(incnt, d.typ, sresnm)
 		}
@@ -651,7 +694,7 @@ func (c *Compiler) compileExpr(incnt int, d *DExpr, back bool) string {
 		slnm := c.gensym()
 		rv += fmt.Sprintf("%svar %s []ui8\n", id, slnm)
 		cnt := c.gensym()
-		rv += fmt.Sprintf("%sfor %s := %d; %s < %d || %s < len(%s); %s++ {\n", id, cnt, d.left, cnt, d.right, cnt, d.lhs.kname, cnt)
+		rv += fmt.Sprintf("%sfor %s := %d; %s < %d && %s < len(%s); %s++ {\n", id, cnt, d.left, cnt, d.right, cnt, d.lhs.kname, cnt)
 		rv += fmt.Sprintf("%s\t%s = append(%s, %s[%s])\n%s}\n", id, slnm, slnm, d.lhs.kname, cnt, id)
 		d.kname = slnm
 		/* it's backprop time */
@@ -668,6 +711,7 @@ func (c *Compiler) compileExpr(incnt int, d *DExpr, back bool) string {
 		newnm := c.gensym()
 		rv += fmt.Sprintf("%svar %s %s\n", id, newnm, d.typ.datum.name)
 		rv += fmt.Sprintf("%s%s = %s{}\n", id, newnm, d.typ.datum.name)
+		d.kname = newnm
 	case EKINDSET:
 		/* expr.lhs = expr.rhs; i.e., compile lhs (back), then rhs (false), then set lhs.kname's var to rhs.kname */
 		id := strings.Repeat("\t", incnt)
@@ -861,7 +905,7 @@ func (c *Compiler) compileSerializeLookup(typ *DType, nm string) string {
 }
 
 func (c *Compiler) compileDatabases() {
-	rv := "package model\n\n"
+	rv := "package model\n\nimport \"cxdatum\"\n\n"
 	for k, v := range c.dbs {
 		v.name = "db" + k
 		rv += fmt.Sprintf("var %s str\n", v.name)
@@ -872,7 +916,7 @@ func (c *Compiler) compileDatabases() {
 		rv += fmt.Sprintf("\t%s = \"%s\"\n\tok = cxdatum.bucket(%s)\n", v.name, k, v.name)
 	}
 	/* we also need to add one final bucket: the meta bucket. */
-	rv += fmt.Sprintf("\tok = cxdatum.bucket(dbmeta)\n")
+	rv += fmt.Sprintf("\tdbmeta = \"meta\"\n\tok = cxdatum.bucket(dbmeta)\n")
 	rv += "}\n\n"
 	c.cxdbase = rv
 }
@@ -939,7 +983,7 @@ func (c *Compiler) compileDatumGoDser(d *DGlause) string {
 			}
 		case TKINDSTRING:
 			if typ.array {
-				rv += fmt.Sprintf("\tslen = makeInt(b[:4])\n\tb = b[4:]\n\tfor i := 0; i < slen; i++ {\n\t\ttmp__ := makeInt(b[:4])\n\t\t%s.%s = append(%s.%s, string(b[:tmp__]))\n\t\tb = b[tmp__:]\n\t}\n", totmp, d.fields[i].name, totmp, d.fields[i].name)
+				rv += fmt.Sprintf("\tslen = makeInt(b[:4])\n\tb = b[4:]\n\tfor i := 0; i < slen; i++ {\n\t\ttmp__ := makeInt(b[:4])\n\t\tb = b[4:]\n\t\t%s.%s = append(%s.%s, string(b[:tmp__]))\n\t\tb = b[tmp__:]\n\t}\n", totmp, d.fields[i].name, totmp, d.fields[i].name)
 			} else {
 				rv += fmt.Sprintf("\tslen = makeInt(b[:4])\n\tb = b[4:]\n\t%s.%s = string(b[:slen])\n\tb = b[slen:]\n", totmp, d.fields[i].name)
 			}
@@ -995,7 +1039,7 @@ func (c *Compiler) compileDatumCXDser(d *DGlause) string {
 			if typ.array {
 				slc += "Slice"
 			}
-			rv += fmt.Sprintf("\t%s = deseralize"+slc+"(obj, &idx)\n", loctmp)
+			rv += fmt.Sprintf("\t%s = deserialize"+slc+"(obj, &idx)\n", loctmp)
 		case TKINDDATUM:
 			/* we CAN allow datum field if it is a special kind of datum. */
 			/* i.e., a datum which only has one field--- of type datum. */
@@ -1056,7 +1100,7 @@ func (c *Compiler) compileDeserialize(incnt int, d *DType, svar string) (string,
 		}
 		locidx := c.gensym()
 		rv += fmt.Sprintf("%svar %s i32\n", id, locidx)
-		rv += fmt.Sprintf("%s%s = deseralize"+slc+"(%s, &%s)\n", id, loctmp, svar, locidx)
+		rv += fmt.Sprintf("%s%s = deserialize"+slc+"(%s, &%s)\n", id, loctmp, svar, locidx)
 	case TKINDDATUM:
 		rv += fmt.Sprintf("%s%s = deserialize%s(%s)\n", id, loctmp, typ.datum.name, svar)
 	case TKINDDATABASE:
@@ -1090,7 +1134,8 @@ func (c *Compiler) compileDatumGoSer(d *DGlause) string {
 			if typ.tkind == TKINDHASH {
 				loctmpstr += fmt.Sprintf("obj.%s%s[:]", d.fields[i].name, loctmparr)
 			} else if typ.tkind == TKINDSTRING {
-				loctmpstr += fmt.Sprintf("[]byte(obj.%s%s)", d.fields[i].name, loctmparr)
+				/* wrong! needs to encode length. */
+				loctmpstr += fmt.Sprintf("append(breakInt(len(obj.%s%s)), []byte(obj.%s%s)...)", d.fields[i].name, loctmparr, d.fields[i].name, loctmparr)
 			} else if typ.tkind == TKINDWALLET {
 				loctmpstr += fmt.Sprintf("obj.%s%s.Bytes()", d.fields[i].name, loctmparr)
 			}
@@ -1152,7 +1197,7 @@ func (c *Compiler) compileDatumCXSer(d *DGlause) string {
 			rv += fmt.Sprintf("\tvar %s [4]ui8\n\t%s = serializeI32(%s)\n", loctmplen, loctmplen, loctmp)
 			loctmplencnt := c.gensym() + d.fields[i].name
 			rv += fmt.Sprintf("\tfor %s := 0; %s < 4; %s++ {\n\t\tout = append(out, %s[%s])\n\t}\n",
-				loctmplencnt, loctmplencnt, loctmplencnt, loctmp, loctmplencnt)
+				loctmplencnt, loctmplencnt, loctmplencnt, loctmplen, loctmplencnt)
 		case TKINDSTRING, TKINDWALLET, TKINDHASH:
 			slc := ""
 			if typ.tkind == TKINDSTRING {
@@ -1166,10 +1211,10 @@ func (c *Compiler) compileDatumCXSer(d *DGlause) string {
 				slc += "Slice"
 			}
 			loctmplen := c.gensym() + d.fields[i].name
-			rv += fmt.Sprintf("\tvar %s []ui8\n\t%s = seralize"+slc+"(%s)\n", loctmplen, loctmplen, loctmp)
+			rv += fmt.Sprintf("\tvar %s []ui8\n\t%s = serialize"+slc+"(%s)\n", loctmplen, loctmplen, loctmp)
 			loctmplencnt := c.gensym() + d.fields[i].name
 			rv += fmt.Sprintf("\tfor %s := 0; %s < len(%s); %s++ {\n\t\tout = append(out, %s[%s])\n\t}\n",
-				loctmplencnt, loctmplencnt, loctmplen, loctmplencnt, loctmp, loctmplencnt)
+				loctmplencnt, loctmplencnt, loctmplen, loctmplencnt, loctmplen, loctmplencnt)
 		case TKINDDATUM:
 			/* we CAN allow datum field if it is a special kind of datum. */
 			/* i.e., a datum which only has one field--- of type datum. */
@@ -1253,6 +1298,7 @@ var stdcxmain string = `
 package main
 
 import "model"
+import "cxdatum"
 
 func extractThing(sl []ui8) (out []ui8) {
     for i := 1; i < len(sl); i++ {
@@ -1304,13 +1350,13 @@ func main()() {
     }
     printf("[CXDATUM] account created. Grabbing blocks.\n")
     /* now we grab all the blocks in the world */
-    var block []ui8
     for i := lent; i <= synclen; i++ {
 	    if i < 1 {
 		    printf("[CXDATUM] SKIPPING BLOCK %d.\n", i)
 	    } else {
+			var block []ui8
         	block = cxdatum.getblock(i)
-        	model.ProcessIncoming(i, block)
+        	model.ProcessIncoming(block)
         	printf("[CXDATUM] block %d processed successfully.\n", i)
 	    }
     }
@@ -1322,7 +1368,8 @@ func main()() {
         printf("api launch failed!")
         return
     }
-    printf("[CXDATUM] API successfully launched.\n")
+	printf("[CXDATUM] API successfully launched.\n")
+	var nlent i32
     /* everything should be processed, so it's time to do the loop */
 `
 
@@ -1366,8 +1413,9 @@ var stdcxmainfooter string = ` else {
         printf("[CXDATUM] new block(s) received (new length: %d), (old: %d)\n", nlent, lent)
         lent = lent + 1
         for i := lent; i <= nlent; i++ {
+			var block []ui8
             block = cxdatum.getblock(i)
-            model.ProcessIncoming(i, block)
+            model.ProcessIncoming(block)
             printf("[CXDATUM] block %d processed successfully.\n", i)
         }
     }
@@ -1406,12 +1454,13 @@ func (c *Compiler) compileMain() {
 
 	eccx := ""
 	ecgo := ""
-	i := 0
+	ii := 0
 	var egrs []*DGlause
 	for _, v := range c.egrs {
-		eccx += fmt.Sprintf("\tvar CXDATUM_EGRESS_CODE_%s ui8 = %d\n", v.name, i)
-		ecgo += fmt.Sprintf("const CXDATUM_EGRESS_CODE_%s = %d\n", v.name, i)
+		eccx += fmt.Sprintf("\tvar CXDATUM_EGRESS_CODE_%s ui8 = %dUB\n", v.name, ii)
+		ecgo += fmt.Sprintf("const CXDATUM_EGRESS_CODE_%s = %d\n", v.name, ii)
 		egrs = append(egrs, v)
+		ii++
 	}
 
 	c.goegrs += stdgomain
@@ -1450,7 +1499,7 @@ func (c *Compiler) compileMain() {
 		cxmain += fmt.Sprintf("if idx == CXDATUM_EGRESS_CODE_%s {\n", v.name)
 		/* deserialize extract */
 		expt := c.gensym()
-		cxmain += fmt.Sprintf("\t\t\tvar %s %s_arg_EgressExpect\n\t\t\t%s = deserialize%s_arg_EgressExpect(%s)\n", expt, v.name, expt, v.name, extract)
+		cxmain += fmt.Sprintf("\t\t\tvar %s model.%s_arg_EgressExpect\n\t\t\t%s = model.deserialize%s_arg_EgressExpect(%s)\n", expt, v.name, expt, v.name, extract)
 		/* move from fields to tmp vars */
 		args := ""
 		for j, _ := range v.expt {

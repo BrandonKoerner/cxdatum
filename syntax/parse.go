@@ -50,6 +50,8 @@ const (
 	CKINDCALL
 	CKINDEXPR //stuff like X set Y
 	CKINDSTORE
+	CKINDDEBUG
+	CKINDEXIT
 )
 
 const (
@@ -358,6 +360,16 @@ func (p *Parser) parseClause(g *DGlause) *DClause {
 		clause.expr = p.parseExpr(g, true)
 		p.want(SCOLON)
 		return clause
+	case DEBUG:
+		clause := new(DClause)
+		clause.ckind = CKINDDEBUG
+		p.Next()
+		clause.expr = p.parseExpr(g, false)
+		p.want(SCOLON)
+		if dtypeToString(clause.expr.typ) != "string" {
+			p.errorf("debug expected expression of type string; got" + dtypeToString(clause.expr.typ))
+		}
+		return clause
 	case STORE:
 		clause := new(DClause)
 		clause.ckind = CKINDSTORE
@@ -375,6 +387,10 @@ func (p *Parser) parseClause(g *DGlause) *DClause {
 		p.mustCheckTypeEqual(clause.exprs[2].typ, dbtyp.dbase.val)
 		p.want(SCOLON)
 		return clause
+	case EXIT:
+		p.Next()
+		p.want(SCOLON)
+		return &DClause{ckind: CKINDEXIT}
 	case IDENT:
 		clause := new(DClause)
 		nm := p.name()

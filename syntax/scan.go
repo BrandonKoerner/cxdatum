@@ -49,6 +49,8 @@ const (
 	EGRESS
 	APPEND
 	NEW
+	DEBUG
+	EXIT
 
 	EOF
 )
@@ -251,6 +253,8 @@ var keywords map[string]int = map[string]int{
 	"egress":   EGRESS,
 	"append":   APPEND,
 	"new":      NEW,
+	"debug":    DEBUG,
+	"exit":     EXIT,
 }
 
 func (s *Scanner) key() {
@@ -355,6 +359,10 @@ func tok2str(tok int) string {
 		return "APPEND"
 	case NEW:
 		return "NEW"
+	case DEBUG:
+		return "DEBUG"
+	case EXIT:
+		return "exit"
 	default:
 		return fmt.Sprintf("INV%d", tok)
 	}
