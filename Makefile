@@ -1,4 +1,4 @@
 build:
-	go build -o $(GOBIN)/cxdatum main.go
-	chmod +x $(GOBIN)/cxdatum
+	go build -o ${GOBIN}/cxdatum main.go
+	chmod +x ${GOBIN}/cxdatum
 
