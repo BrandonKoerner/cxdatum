@@ -701,7 +701,7 @@ func (c *Compiler) compileExpr(incnt int, d *DExpr, back bool) string {
 		if back {
 			bkrv := ""
 			ncnt := c.gensym()
-			bkrv += fmt.Sprintf("%sfor %s := 0; %s < %d; %s++ {\n", id, ncnt, ncnt, d.right-d.left, ncnt)
+			bkrv += fmt.Sprintf("%sfor %s := 0; %s < %d && %s < len(%s); %s++ {\n", id, ncnt, ncnt, d.right-d.left, ncnt, slnm, ncnt)
 			bkrv += fmt.Sprintf("%s\t%s[%s + %d] = %s[%s]\n%s}\n", id, d.lhs.kname, ncnt, d.left, slnm, ncnt, id)
 			backstack = append(backstack, bkrv)
 		}
