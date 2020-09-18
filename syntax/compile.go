@@ -407,6 +407,34 @@ func walSliceIndex(wsl []ui8, idx i32) (out [25]ui8) {
         out[i] = wsl[cidx]
     }
 }
+
+func serializeI32Slice(sl []i32) (out []ui8) {
+	var slen [4]ui8 = serializeI32(len(sl))
+    for i := 0; i < 4; i++ {
+        out = append(out, slen[i])
+    }
+    for j := 0; j < len(sl); j++ {
+        var sernum [4]ui8 = serializeI32(sl[j])
+        for i := 0; i < 4; i++ {
+            out = append(out, sernum[i])
+        }
+    }
+}
+
+func deserializeI32Slice(sl []ui8, idx_ *i32) (out []i32) {
+	var idx i32 = *idx_
+	var slen i32
+	if len(sl) <= idx {
+		return
+	}
+    slen = deserializeI32(sl, &idx)
+    for j := 0; j < slen; j++ {
+		var snum i32
+		snum = deserializeI32(sl, &idx)
+		out = append(out, snum)
+	}
+    (*idx_) = idx
+}
 `
 
 func (c *Compiler) compileIngress(d *DGlause) {
@@ -460,7 +488,7 @@ func (c *Compiler) compileEgress(d *DGlause) {
 func (c *Compiler) compileAppend(typ *DType, index bool, arr string, idx string) string {
 	/* returns func for indexing or append */
 	switch typ.tkind {
-	case TKINDBYTE, TKINDSTRING:
+	case TKINDBYTE, TKINDSTRING, TKINDINT:
 		if index {
 			return fmt.Sprintf("%s[%s]", arr, idx)
 		} else {
@@ -571,7 +599,7 @@ func (c *Compiler) compileClause(incnt int, d *DClause) string {
 	default:
 		panic("unknown statement/clause type!")
 	}
-	return rv
+	return rv + "\n"
 }
 
 func (c *Compiler) compileFor(incnt int, d *DClause) string {
@@ -869,6 +897,8 @@ func (c *Compiler) compileSerialize(typ *DType, nm string) string {
 	if typ.tkind != TKINDBYTE {
 		rv += "serialize"
 		switch typ.tkind {
+		case TKINDINT:
+			rv += "I32"
 		case TKINDSTRING:
 			rv += "Str"
 		case TKINDWALLET:
@@ -968,7 +998,11 @@ func (c *Compiler) compileDatumGoDser(d *DGlause) string {
 				}
 			}
 		case TKINDINT:
-			rv += fmt.Sprintf("\t%s.%s = makeInt(b[:4])\n\tb = b[4:]\n", totmp, d.fields[i].name)
+			if typ.array {
+				rv += fmt.Sprintf("\tslen = makeInt(b[:4])\n\tb = b[4:]\n\tfor i := 0; i < slen; i++ {\n\t\t%s.%s = append(%s.%s, makeInt(b[:4]))\n\t\tb = b[4:]\n\t}\n", totmp, d.fields[i].name, totmp, d.fields[i].name)
+			} else {
+				rv += fmt.Sprintf("\t%s.%s = makeInt(b[:4])\n\tb = b[4:]\n", totmp, d.fields[i].name)
+			}
 		case TKINDHASH:
 			if typ.array {
 				rv += fmt.Sprintf("\tslen = makeInt(b[:4])\n\tb = b[4:]\n\tfor i := 0; i < slen; i++ {\n\t\ttmp__, _ := cipher.SHA256FromBytes(b[:32])\n\t\t%s.%s = append(%s.%s, tmp__)\n\t\tb = b[32:]\n\t}\n", totmp, d.fields[i].name, totmp, d.fields[i].name)
@@ -1024,9 +1058,10 @@ func (c *Compiler) compileDatumCXDser(d *DGlause) string {
 			}
 		case TKINDINT:
 			if typ.array {
-				panic("cannot have array of int.")
+				rv += fmt.Sprintf("\t%s = deserializeI32Slice(obj, &idx)\n", loctmp)
+			} else {
+				rv += fmt.Sprintf("\t%s = deserializeI32(obj, &idx)\n", loctmp)
 			}
-			rv += fmt.Sprintf("\t%s = deserializeI32(obj, &idx)\n", loctmp)
 		case TKINDSTRING, TKINDWALLET, TKINDHASH:
 			slc := ""
 			if typ.tkind == TKINDSTRING {
@@ -1081,11 +1116,14 @@ func (c *Compiler) compileDeserialize(incnt int, d *DType, svar string) (string,
 		}
 	case TKINDINT:
 		if typ.array {
-			panic("cannot have array of int.")
+			locidx := c.gensym()
+			rv += fmt.Sprintf("%svar %s i32\n", id, locidx)
+			rv += fmt.Sprintf("%s%s = deserializeI32Slice(%s, &%s)\n", id, loctmp, svar, locidx)
+		} else {
+			locidx := c.gensym()
+			rv += fmt.Sprintf("%svar %s i32\n", id, locidx)
+			rv += fmt.Sprintf("%s%s = deserializeI32(%s, &%s)\n", id, loctmp, svar, locidx)
 		}
-		locidx := c.gensym()
-		rv += fmt.Sprintf("%svar %s i32\n", id, locidx)
-		rv += fmt.Sprintf("%s%s = deserializeI32(%s, &%s)\n", id, loctmp, svar, locidx)
 	case TKINDSTRING, TKINDWALLET, TKINDHASH:
 		slc := ""
 		if typ.tkind == TKINDSTRING {
@@ -1124,7 +1162,13 @@ func (c *Compiler) compileDatumGoSer(d *DGlause) string {
 				}
 			}
 		case TKINDINT:
-			rv += fmt.Sprintf("\tout = append(out, breakInt(obj.%s)...)\n", d.fields[i].name)
+			if typ.array {
+				rv += fmt.Sprintf("\tout = append(out, breakInt(len(obj.%s))...)\n", d.fields[i].name)
+				rv += fmt.Sprintf("\tfor i := 0; i < len(obj.%s); i++ {\n", d.fields[i].name)
+				rv += fmt.Sprintf("\t\tout = append(out, breakInt(obj.%s[i])...)\n\t}\n", d.fields[i].name)
+			} else {
+				rv += fmt.Sprintf("\tout = append(out, breakInt(obj.%s)...)\n", d.fields[i].name)
+			}
 		case TKINDHASH, TKINDWALLET, TKINDSTRING:
 			loctmpstr := ""
 			loctmparr := "[i]"
@@ -1191,13 +1235,18 @@ func (c *Compiler) compileDatumCXSer(d *DGlause) string {
 			}
 		case TKINDINT:
 			if typ.array {
-				panic("cannot have array of int.")
+				loctmpi32 := c.gensym() + d.fields[i].name
+				rv += fmt.Sprintf("\tvar %s []ui8\n\t%s = serializeI32Slice(%s)\n", loctmpi32, loctmpi32, loctmp)
+				loctmplencnt := c.gensym() + d.fields[i].name
+				rv += fmt.Sprintf("\tfor %s := 0; %s < len(%s); %s++ {\n\t\tout = append(out, %s[%s])\n\t}\n",
+					loctmplencnt, loctmplencnt, loctmpi32, loctmplencnt, loctmpi32, loctmplencnt)
+			} else {
+				loctmplen := c.gensym() + d.fields[i].name
+				rv += fmt.Sprintf("\tvar %s [4]ui8\n\t%s = serializeI32(%s)\n", loctmplen, loctmplen, loctmp)
+				loctmplencnt := c.gensym() + d.fields[i].name
+				rv += fmt.Sprintf("\tfor %s := 0; %s < 4; %s++ {\n\t\tout = append(out, %s[%s])\n\t}\n",
+					loctmplencnt, loctmplencnt, loctmplencnt, loctmplen, loctmplencnt)
 			}
-			loctmplen := c.gensym() + d.fields[i].name
-			rv += fmt.Sprintf("\tvar %s [4]ui8\n\t%s = serializeI32(%s)\n", loctmplen, loctmplen, loctmp)
-			loctmplencnt := c.gensym() + d.fields[i].name
-			rv += fmt.Sprintf("\tfor %s := 0; %s < 4; %s++ {\n\t\tout = append(out, %s[%s])\n\t}\n",
-				loctmplencnt, loctmplencnt, loctmplencnt, loctmplen, loctmplencnt)
 		case TKINDSTRING, TKINDWALLET, TKINDHASH:
 			slc := ""
 			if typ.tkind == TKINDSTRING {
@@ -1349,7 +1398,8 @@ func main()() {
         return
     }
     printf("[CXDATUM] account created. Grabbing blocks.\n")
-    /* now we grab all the blocks in the world */
+	/* now we grab all the blocks in the world */
+	lent = lent + 1
     for i := lent; i <= synclen; i++ {
 	    if i < 1 {
 		    printf("[CXDATUM] SKIPPING BLOCK %d.\n", i)
